@@ -18,7 +18,8 @@
     segmentStats: [],
     lastKeyPressTime: 0,
     wheelRotation: 0,
-    activeCheckpointIndex: -1
+    activeCheckpointIndex: -1,
+    usedCheckpoints: new Set()
   };
 
   const elements = {};
@@ -265,8 +266,10 @@
     state.judgments = [];
     state.wheelRotation = 0;
     state.activeCheckpointIndex = -1;
+    state.usedCheckpoints = new Set();
     elements.wheelInner.style.transform = 'rotate(0deg)';
     elements.progressFill.style.width = '0%';
+    elements.progressFill.classList.remove('warning');
     elements.timeCursor.setAttribute('x1', '0');
     elements.timeCursor.setAttribute('x2', '0');
     elements.currentTime.textContent = '0.0s';
@@ -311,16 +314,16 @@
   }
 
   function calculateCurrentRpm() {
-    const variation = (Math.random() - 0.5) * 10;
+    const variation = (Math.random() - 0.5) * 6;
     return Math.max(0, state.targetRpm + variation);
   }
 
   function updateWheelRotation() {
     const rpm = state.currentRpm;
-    const degreesPerMs = (rpm * 360) / 60000;
+    const degreesPerMs = rpm > 0 ? (rpm * 360) / 60000 : 0;
     state.wheelRotation += degreesPerMs * 16.67;
     elements.wheelInner.style.transform = `rotate(${state.wheelRotation}deg)`;
-    elements.wheelInner.style.animationDuration = Math.max(0.1, 60 / rpm) + 's';
+    elements.wheelInner.style.animationDuration = rpm > 0 ? Math.max(0.1, 60 / rpm) + 's' : '999s';
   }
 
   function updateDisplay() {
@@ -350,6 +353,7 @@
 
   function updateCheckpointHighlight() {
     const markers = elements.checkpointMarkers.querySelectorAll('.checkpoint-marker');
+    let foundActive = false;
     markers.forEach(marker => {
       marker.classList.remove('active', 'passed');
       const index = parseInt(marker.dataset.index, 10);
@@ -357,10 +361,14 @@
       if (state.currentTime >= cp.startTime && state.currentTime <= cp.endTime) {
         marker.classList.add('active');
         state.activeCheckpointIndex = index;
+        foundActive = true;
       } else if (state.currentTime > cp.endTime) {
         marker.classList.add('passed');
       }
     });
+    if (!foundActive) {
+      state.activeCheckpointIndex = -1;
+    }
   }
 
   function handleKeydown(e) {
@@ -370,7 +378,7 @@
     if (now - state.lastKeyPressTime < 200) return;
     state.lastKeyPressTime = now;
     if (!state.isPlaying) {
-      if (state.currentTime === 0) {
+      if (state.currentSegment) {
         play();
       }
       return;
@@ -380,22 +388,42 @@
 
   function processConfirmation() {
     if (state.activeCheckpointIndex === -1) {
-      showToast('不在有效检查时段内', 'warning');
+      showInvalidTimingWarning();
+      return;
+    }
+    if (state.usedCheckpoints.has(state.activeCheckpointIndex)) {
+      showToast('该检查点已记录过', 'warning');
       return;
     }
     const cp = state.currentSegment.checkpoints[state.activeCheckpointIndex];
-    const judgment = createJudgment(cp.targetRpm);
+    const judgment = createJudgment(cp);
     recordJudgment(judgment, state.activeCheckpointIndex);
+    state.usedCheckpoints.add(state.activeCheckpointIndex);
     updateStreak(judgment);
     updateSegmentStats(judgment, state.activeCheckpointIndex);
     addJudgmentMarker(judgment);
     addJudgmentToList(judgment);
     updateStatsDisplay();
+    renderSegmentStatsDisplay();
     flashJudgment(judgment.result);
   }
-  function createJudgment(targetRpm) {
+
+  function showInvalidTimingWarning() {
+    showToast('不在有效检查时段内', 'warning');
+    elements.progressFill.classList.add('warning');
+    setTimeout(() => {
+      elements.progressFill.classList.remove('warning');
+    }, 500);
+  }
+  function createJudgment(cp) {
+    const targetRpm = cp.targetRpm;
     const actualRpm = state.currentRpm;
-    const deviation = Math.abs(actualRpm - targetRpm) / targetRpm * 100;
+    const centerTime = (cp.startTime + cp.endTime) / 2;
+    const timeOffset = Math.abs(state.currentTime - centerTime);
+    const halfDuration = (cp.endTime - cp.startTime) / 2;
+    const timingFactor = timeOffset / halfDuration;
+    const rpmDeviation = Math.abs(actualRpm - targetRpm) / targetRpm * 100;
+    const deviation = rpmDeviation * 0.4 + timingFactor * 100 * 0.6;
     let result;
     if (deviation <= JUDGMENT_THRESHOLDS.STEADY) {
       result = 'steady';
@@ -455,7 +483,6 @@
     stat.deviations.push(judgment.deviation);
     stat.steadyRatio = (stat.steadyCount / stat.totalChecks) * 100;
     stat.avgDeviation = stat.deviations.reduce((a, b) => a + b, 0) / stat.deviations.length;
-    updateSegmentStatsDisplay();
   }
   function addJudgmentMarker(judgment) {
     if (!state.currentSegment) return;

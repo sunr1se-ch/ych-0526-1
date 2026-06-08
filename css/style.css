@@ -330,8 +330,13 @@ body::before {
   height: 100%;
   background: linear-gradient(90deg, var(--color-clay-light), var(--color-clay));
   border-radius: var(--radius-md);
-  transition: width 0.05s linear;
+  transition: width 0.05s linear, background 0.15s ease, box-shadow 0.15s ease;
   box-shadow: 0 0 20px rgba(181, 101, 29, 0.4);
+}
+
+.progress-fill.warning {
+  background: linear-gradient(90deg, #FFD54F, #FFA000);
+  box-shadow: 0 0 20px rgba(255, 160, 0, 0.6);
 }
 
 .checkpoint-markers,
