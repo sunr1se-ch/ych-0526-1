@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>制陶拉坯转速节拍对照</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&family=Playfair+Display:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <h1 class="app-title">制陶拉坯转速节拍对照</h1>
+      <p class="app-subtitle">对照目标曲线，稳定控制陶轮转速</p>
+    </header>
+
+    <main class="main-content">
+      <div class="left-panel">
+        <div class="pottery-wheel-container">
+          <div class="wheel-outer">
+            <div class="wheel-inner" id="wheelInner">
+              <div class="wheel-center"></div>
+              <div class="wheel-ridges">
+                <div class="ridge"></div>
+                <div class="ridge"></div>
+                <div class="ridge"></div>
+                <div class="ridge"></div>
+                <div class="ridge"></div>
+                <div class="ridge"></div>
+              </div>
+            </div>
+          </div>
+          <div class="rpm-display">
+            <span class="rpm-value" id="rpmValue">0</span>
+            <span class="rpm-unit">RPM</span>
+          </div>
+          <div class="target-rpm-display">
+            目标: <span id="targetRpmValue">0</span> RPM
+          </div>
+        </div>
+
+        <div class="curve-container">
+          <div class="curve-header">
+            <h3>目标转速曲线</h3>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-dot steady"></span>Steady</span>
+              <span class="legend-item"><span class="legend-dot drift"></span>Drift</span>
+              <span class="legend-item"><span class="legend-dot break"></span>Break</span>
+            </div>
+          </div>
+          <svg id="rpmCurve" class="rpm-curve" viewBox="0 0 600 200" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="curveGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" style="stop-color:#B5651D;stop-opacity:0.3" />
+                <stop offset="100%" style="stop-color:#B5651D;stop-opacity:0.05" />
+              </linearGradient>
+            </defs>
+            <path id="curveArea" fill="url(#curveGradient)" />
+            <path id="curveLine" fill="none" stroke="#B5651D" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            <line id="timeCursor" x1="0" y1="0" x2="0" y2="200" stroke="#3D2914" stroke-width="1.5" stroke-dasharray="4,4" />
+            <g id="judgmentMarkers"></g>
+          </svg>
+          <div class="time-scale">
+            <span id="timeStart">0s</span>
+            <span id="timeEnd">0s</span>
+          </div>
+        </div>
+
+        <div class="progress-container">
+          <div class="progress-bar" id="progressBar">
+            <div class="progress-fill" id="progressFill"></div>
+            <div class="checkpoint-markers" id="checkpointMarkers"></div>
+            <div class="active-segments" id="activeSegments"></div>
+          </div>
+          <div class="time-display">
+            <span id="currentTime">0.0s</span>
+            <span>/</span>
+            <span id="totalTime">0.0s</span>
+          </div>
+        </div>
+
+        <div class="key-hint">
+          按 <kbd>空格</kbd> 确认当前节奏
+        </div>
+      </div>
+
+      <div class="right-panel">
+        <div class="stats-grid">
+          <div class="stat-card streak-card">
+            <div class="stat-label">当前 Streak</div>
+            <div class="stat-value" id="streakValue">0</div>
+            <div class="stat-sub">连续稳定确认</div>
+          </div>
+          <div class="stat-card best-card">
+            <div class="stat-label">个人最佳</div>
+            <div class="stat-value" id="bestStreakValue">0</div>
+            <div class="stat-sub">历史最佳 Streak</div>
+          </div>
+          <div class="stat-card ratio-card">
+            <div class="stat-label">Steady 占比</div>
+            <div class="stat-value">
+              <span id="steadyRatio">0</span><span class="stat-unit">%</span>
+            </div>
+            <div class="stat-sub">总确认次数: <span id="totalChecks">0</span></div>
+          </div>
+          <div class="stat-card deviation-card">
+            <div class="stat-label">平均偏差</div>
+            <div class="stat-value">
+              <span id="avgDeviation">0.0</span><span class="stat-unit">%</span>
+            </div>
+            <div class="stat-sub">目标 RPM 偏差</div>
+          </div>
+        </div>
+
+        <div class="segment-stats-container">
+          <h3>各段统计</h3>
+          <div class="segment-stats" id="segmentStats"></div>
+        </div>
+
+        <div class="control-panel">
+          <div class="segment-selector">
+            <label for="segmentSelect">选择训练片段</label>
+            <select id="segmentSelect"></select>
+          </div>
+          <div class="segment-info" id="segmentInfo"></div>
+          <div class="control-buttons">
+            <button id="playBtn" class="btn btn-primary">
+              <span class="btn-icon">▶</span>
+              开始
+            </button>
+            <button id="pauseBtn" class="btn btn-secondary" disabled>
+              <span class="btn-icon">⏸</span>
+              暂停
+            </button>
+            <button id="resetBtn" class="btn btn-outline">
+              <span class="btn-icon">↺</span>
+              重置
+            </button>
+          </div>
+        </div>
+
+        <div class="judgment-history">
+          <h3>判定记录</h3>
+          <div class="judgment-list" id="judgmentList"></div>
+        </div>
+      </div>
+    </main>
+
+    <div class="flash-overlay" id="flashOverlay"></div>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
