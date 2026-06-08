@@ -19,7 +19,12 @@
     lastKeyPressTime: 0,
     wheelRotation: 0,
     activeCheckpointIndex: -1,
-    usedCheckpoints: new Set()
+    usedCheckpoints: new Set(),
+    isReviewMode: false,
+    isReviewCompleted: false,
+    isDragging: false,
+    reviewSnapshot: null,
+    hoverTime: null
   };
 
   const elements = {};
@@ -48,7 +53,11 @@
     elements.timeEnd = document.getElementById('timeEnd');
     elements.progressFill = document.getElementById('progressFill');
     elements.checkpointMarkers = document.getElementById('checkpointMarkers');
+    elements.missedCheckpointMarkers = document.getElementById('missedCheckpointMarkers');
+    elements.missedCheckpointRects = document.getElementById('missedCheckpointRects');
     elements.activeSegments = document.getElementById('activeSegments');
+    elements.progressBar = document.getElementById('progressBar');
+    elements.progressDragHandle = document.getElementById('progressDragHandle');
     elements.currentTime = document.getElementById('currentTime');
     elements.totalTime = document.getElementById('totalTime');
     elements.streakValue = document.getElementById('streakValue');
@@ -61,10 +70,32 @@
     elements.segmentInfo = document.getElementById('segmentInfo');
     elements.playBtn = document.getElementById('playBtn');
     elements.pauseBtn = document.getElementById('pauseBtn');
+    elements.reviewBtn = document.getElementById('reviewBtn');
     elements.resetBtn = document.getElementById('resetBtn');
     elements.judgmentList = document.getElementById('judgmentList');
     elements.flashOverlay = document.getElementById('flashOverlay');
     elements.toast = document.getElementById('toast');
+    elements.reviewBadge = document.getElementById('reviewBadge');
+    elements.reviewBadgeText = document.getElementById('reviewBadgeText');
+    elements.hoverTooltip = document.getElementById('hoverTooltip');
+    elements.tooltipTime = document.getElementById('tooltipTime');
+    elements.tooltipTargetRpm = document.getElementById('tooltipTargetRpm');
+    elements.tooltipPreview = document.getElementById('tooltipPreview');
+    elements.normalPanel = document.getElementById('normalPanel');
+    elements.reviewPanel = document.getElementById('reviewPanel');
+    elements.reviewStatus = document.getElementById('reviewStatus');
+    elements.reviewConfirmRate = document.getElementById('reviewConfirmRate');
+    elements.reviewConfirmed = document.getElementById('reviewConfirmed');
+    elements.reviewTotalCheckpoints = document.getElementById('reviewTotalCheckpoints');
+    elements.reviewMissedCount = document.getElementById('reviewMissedCount');
+    elements.reviewTimingDeviation = document.getElementById('reviewTimingDeviation');
+    elements.reviewAvgDeviation = document.getElementById('reviewAvgDeviation');
+    elements.checkpointDetailList = document.getElementById('checkpointDetailList');
+    elements.exitReviewBtn = document.getElementById('exitReviewBtn');
+    elements.previewMarker = document.getElementById('previewMarker');
+    elements.previewCircle = document.getElementById('previewCircle');
+    elements.previewText = document.getElementById('previewText');
+    elements.progressContainer = document.querySelector('.progress-container');
   }
 
   function loadBestStreak() {
@@ -97,11 +128,30 @@
   }
 
   function bindEvents() {
-    elements.segmentSelect.addEventListener('change', (e) => selectSegment(e.target.value));
-    elements.playBtn.addEventListener('click', play);
+    elements.segmentSelect.addEventListener('change', (e) => {
+      exitReviewMode();
+      selectSegment(e.target.value);
+    });
+    elements.playBtn.addEventListener('click', () => {
+      if (state.isReviewMode) {
+        exitReviewMode();
+      }
+      play();
+    });
     elements.pauseBtn.addEventListener('click', pause);
-    elements.resetBtn.addEventListener('click', reset);
+    elements.resetBtn.addEventListener('click', () => {
+      exitReviewMode();
+      reset();
+    });
+    elements.reviewBtn.addEventListener('click', enterReviewMode);
+    elements.exitReviewBtn.addEventListener('click', () => {
+      exitReviewMode();
+      reset();
+      play();
+    });
     document.addEventListener('keydown', handleKeydown);
+    bindDragEvents();
+    bindHoverEvents();
   }
 
   function selectSegment(segmentId) {
@@ -238,6 +288,7 @@
     state.startTime = performance.now() - state.pausedTime * 1000;
     elements.playBtn.disabled = true;
     elements.pauseBtn.disabled = false;
+    elements.reviewBtn.disabled = false;
     elements.segmentSelect.disabled = true;
     animationLoop();
   }
@@ -252,6 +303,9 @@
     }
     elements.playBtn.disabled = false;
     elements.pauseBtn.disabled = true;
+    if (!state.isReviewMode) {
+      elements.reviewBtn.disabled = state.judgments.length === 0;
+    }
     elements.segmentSelect.disabled = false;
   }
 
@@ -290,6 +344,8 @@
       updateDisplay();
       pause();
       showToast('训练完成！');
+      state.isReviewCompleted = true;
+      enterReviewMode();
       return;
     }
     state.targetRpm = getTargetRpm(state.currentTime);
@@ -377,6 +433,9 @@
     const now = Date.now();
     if (now - state.lastKeyPressTime < 200) return;
     state.lastKeyPressTime = now;
+    if (state.isReviewMode) {
+      return;
+    }
     if (!state.isPlaying) {
       if (state.currentSegment) {
         play();
@@ -445,6 +504,7 @@
     state.judgments.push(judgment);
   }
   function updateStreak(judgment) {
+    if (state.isReviewMode) return;
     if (judgment.result === 'steady') {
       state.streak += 1;
       state.consecutiveBreaks = 0;
@@ -557,5 +617,337 @@
       elements.toast.classList.remove('show');
     }, 2000);
   }
+
+  function saveReviewSnapshot() {
+    state.reviewSnapshot = {
+      judgments: [...state.judgments],
+      usedCheckpoints: new Set(state.usedCheckpoints),
+      segmentStats: JSON.parse(JSON.stringify(state.segmentStats)),
+      streak: state.streak,
+      consecutiveBreaks: state.consecutiveBreaks
+    };
+  }
+
+  function enterReviewMode() {
+    if (!state.currentSegment) return;
+    if (state.judgments.length === 0) {
+      showToast('请先进行至少一次确认', 'warning');
+      return;
+    }
+    pause();
+    saveReviewSnapshot();
+    state.isReviewMode = true;
+    elements.reviewBadge.style.display = 'flex';
+    if (state.isReviewCompleted) {
+      elements.reviewBadge.classList.remove('unfinished');
+      elements.reviewBadgeText.textContent = '复盘模式';
+    } else {
+      elements.reviewBadge.classList.add('unfinished');
+      elements.reviewBadgeText.textContent = '复盘模式 · 未完成';
+    }
+    elements.normalPanel.style.display = 'none';
+    elements.reviewPanel.style.display = 'flex';
+    elements.progressBar.classList.add('draggable');
+    elements.progressDragHandle.style.display = 'block';
+    elements.reviewBtn.disabled = true;
+    renderMissedCheckpoints();
+    renderReviewPanel();
+    updateReviewDisplay();
+    showToast('已进入复盘模式');
+  }
+
+  function exitReviewMode() {
+    if (!state.isReviewMode) return;
+    state.isReviewMode = false;
+    state.isReviewCompleted = false;
+    state.isDragging = false;
+    state.hoverTime = null;
+    elements.reviewBadge.style.display = 'none';
+    elements.normalPanel.style.display = 'flex';
+    elements.reviewPanel.style.display = 'none';
+    elements.progressBar.classList.remove('draggable');
+    elements.progressDragHandle.style.display = 'none';
+    elements.missedCheckpointMarkers.innerHTML = '';
+    elements.missedCheckpointRects.innerHTML = '';
+    elements.hoverTooltip.style.display = 'none';
+    elements.previewMarker.style.display = 'none';
+    elements.reviewBtn.disabled = true;
+    if (state.reviewSnapshot) {
+      state.judgments = [...state.reviewSnapshot.judgments];
+      state.usedCheckpoints = new Set(state.reviewSnapshot.usedCheckpoints);
+      state.segmentStats = JSON.parse(JSON.stringify(state.reviewSnapshot.segmentStats));
+      state.streak = state.reviewSnapshot.streak;
+      state.consecutiveBreaks = state.reviewSnapshot.consecutiveBreaks;
+      state.reviewSnapshot = null;
+    }
+    renderSegmentStatsDisplay();
+    updateStatsDisplay();
+    updateCheckpointHighlight();
+  }
+
+  function renderMissedCheckpoints() {
+    if (!state.currentSegment) return;
+    const duration = state.currentSegment.duration;
+    const checkpoints = state.currentSegment.checkpoints;
+    elements.missedCheckpointMarkers.innerHTML = '';
+    elements.missedCheckpointRects.innerHTML = '';
+    const maxRpm = Math.max(...state.currentSegment.rpmCurve.map(p => p.rpm)) * 1.2 || 100;
+    checkpoints.forEach((cp, index) => {
+      if (!state.usedCheckpoints.has(index)) {
+        const marker = document.createElement('div');
+        marker.className = 'missed-checkpoint-marker';
+        marker.style.left = ((cp.startTime / duration) * 100) + '%';
+        marker.style.width = (((cp.endTime - cp.startTime) / duration) * 100) + '%';
+        elements.missedCheckpointMarkers.appendChild(marker);
+        const padding = 10;
+        const width = 600;
+        const height = 200;
+        const x1 = padding + (cp.startTime / duration) * (width - 2 * padding);
+        const x2 = padding + (cp.endTime / duration) * (width - 2 * padding);
+        const y1 = padding;
+        const y2 = height - padding;
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', x1.toFixed(2));
+        rect.setAttribute('y', y1);
+        rect.setAttribute('width', (x2 - x1).toFixed(2));
+        rect.setAttribute('height', (y2 - y1));
+        rect.setAttribute('class', 'missed-rect');
+        elements.missedCheckpointRects.appendChild(rect);
+      }
+    });
+  }
+
+  function renderReviewPanel() {
+    if (!state.currentSegment) return;
+    const checkpoints = state.currentSegment.checkpoints;
+    const totalCheckpoints = checkpoints.length;
+    const confirmedCheckpoints = state.usedCheckpoints.size;
+    const missedCheckpoints = totalCheckpoints - confirmedCheckpoints;
+    const confirmRate = totalCheckpoints > 0 ? (confirmedCheckpoints / totalCheckpoints) * 100 : 0;
+    if (state.isReviewCompleted) {
+      elements.reviewStatus.classList.remove('unfinished');
+      elements.reviewStatus.querySelector('.status-text').textContent = '已完成';
+    } else {
+      elements.reviewStatus.classList.add('unfinished');
+      elements.reviewStatus.querySelector('.status-text').textContent = '未完成';
+    }
+    elements.reviewConfirmRate.textContent = confirmRate.toFixed(0);
+    elements.reviewConfirmed.textContent = confirmedCheckpoints;
+    elements.reviewTotalCheckpoints.textContent = totalCheckpoints;
+    elements.reviewMissedCount.textContent = missedCheckpoints;
+    const timingDeviations = [];
+    const rpmDeviations = [];
+    state.judgments.forEach(j => {
+      if (j.segmentIndex !== undefined) {
+        const cp = checkpoints[j.segmentIndex];
+        if (cp) {
+          const centerTime = (cp.startTime + cp.endTime) / 2;
+          timingDeviations.push(Math.abs(j.time - centerTime));
+        }
+      }
+      rpmDeviations.push(j.deviation);
+    });
+    const avgTimingDeviation = timingDeviations.length > 0
+      ? timingDeviations.reduce((a, b) => a + b, 0) / timingDeviations.length
+      : 0;
+    const avgRpmDeviation = rpmDeviations.length > 0
+      ? rpmDeviations.reduce((a, b) => a + b, 0) / rpmDeviations.length
+      : 0;
+    elements.reviewTimingDeviation.textContent = avgTimingDeviation.toFixed(2);
+    elements.reviewAvgDeviation.textContent = avgRpmDeviation.toFixed(1);
+    elements.checkpointDetailList.innerHTML = '';
+    checkpoints.forEach((cp, index) => {
+      const isUsed = state.usedCheckpoints.has(index);
+      const judgment = isUsed
+        ? state.judgments.find(j => j.segmentIndex === index)
+        : null;
+      const item = document.createElement('div');
+      item.className = 'checkpoint-detail-item';
+      if (isUsed && judgment) {
+        item.classList.add('confirmed-' + judgment.result);
+      } else {
+        item.classList.add('missed');
+      }
+      const centerTime = (cp.startTime + cp.endTime) / 2;
+      let resultHtml = '';
+      let timingHtml = `${cp.startTime}s - ${cp.endTime}s`;
+      if (isUsed && judgment) {
+        const resultText = { steady: 'Steady', drift: 'Drift', break: 'Break' }[judgment.result];
+        resultHtml = `<span class="checkpoint-detail-result ${judgment.result}">${resultText}</span>`;
+        const timeOffset = (judgment.time - centerTime).toFixed(2);
+        const offsetStr = timeOffset > 0 ? `+${timeOffset}s` : `${timeOffset}s`;
+        timingHtml = `${cp.startTime}s - ${cp.endTime}s · 按于 ${judgment.time.toFixed(1)}s (${offsetStr})`;
+      } else {
+        resultHtml = `<span class="checkpoint-detail-result missed">漏按</span>`;
+      }
+      item.innerHTML = `
+        <span class="checkpoint-detail-time">#${index + 1}</span>
+        <div class="checkpoint-detail-info">
+          <span class="checkpoint-detail-rpm">${cp.targetRpm} RPM</span>
+          <span class="checkpoint-detail-timing">${timingHtml}</span>
+        </div>
+        ${resultHtml}
+      `;
+      item.addEventListener('click', () => {
+        seekToTime(cp.startTime);
+      });
+      elements.checkpointDetailList.appendChild(item);
+    });
+  }
+
+  function bindDragEvents() {
+    let isDragging = false;
+    const handleDragStart = (e) => {
+      if (!state.isReviewMode) return;
+      e.preventDefault();
+      isDragging = true;
+      state.isDragging = true;
+      elements.progressBar.classList.add('dragging');
+      handleDragMove(e);
+    };
+    const handleDragMove = (e) => {
+      if (!isDragging || !state.isReviewMode) return;
+      const rect = elements.progressBar.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      let x = (clientX - rect.left) / rect.width;
+      x = Math.max(0, Math.min(1, x));
+      const time = x * state.currentSegment.duration;
+      seekToTime(time);
+    };
+    const handleDragEnd = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      state.isDragging = false;
+      elements.progressBar.classList.remove('dragging');
+    };
+    elements.progressBar.addEventListener('mousedown', handleDragStart);
+    elements.progressDragHandle.addEventListener('mousedown', handleDragStart);
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+    elements.progressBar.addEventListener('touchstart', handleDragStart, { passive: false });
+    document.addEventListener('touchmove', handleDragMove, { passive: false });
+    document.addEventListener('touchend', handleDragEnd);
+  }
+
+  function bindHoverEvents() {
+    const handleMouseMove = (e) => {
+      if (!state.isReviewMode) return;
+      const rect = elements.progressBar.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      if (x < 0 || x > 1) {
+        hideHoverTooltip();
+        return;
+      }
+      const time = x * state.currentSegment.duration;
+      state.hoverTime = time;
+      showHoverTooltip(time, e.clientX);
+    };
+    const handleMouseLeave = () => {
+      if (!state.isDragging) {
+        hideHoverTooltip();
+        state.hoverTime = null;
+      }
+    };
+    elements.progressContainer.addEventListener('mousemove', handleMouseMove);
+    elements.progressContainer.addEventListener('mouseleave', handleMouseLeave);
+  }
+
+  function seekToTime(time) {
+    if (!state.currentSegment) return;
+    state.currentTime = time;
+    state.targetRpm = getTargetRpm(time);
+    state.currentRpm = calculateCurrentRpm();
+    state.wheelRotation = (state.currentRpm * 360 * time) / 60;
+    elements.wheelInner.style.transform = `rotate(${state.wheelRotation}deg)`;
+    elements.wheelInner.style.animationDuration = state.currentRpm > 0 ? Math.max(0.1, 60 / state.currentRpm) + 's' : '999s';
+    updateReviewDisplay();
+  }
+
+  function updateReviewDisplay() {
+    updateProgress();
+    updateRpmDisplay();
+    updateTimeCursor();
+    updateCheckpointHighlight();
+    updateDragHandle();
+  }
+
+  function updateDragHandle() {
+    if (!state.currentSegment) return;
+    const progress = (state.currentTime / state.currentSegment.duration) * 100;
+    elements.progressDragHandle.style.left = progress + '%';
+  }
+
+  function showHoverTooltip(time, clientX) {
+    if (!state.currentSegment) return;
+    const targetRpm = getTargetRpm(time);
+    elements.tooltipTime.textContent = time.toFixed(1) + 's';
+    elements.tooltipTargetRpm.textContent = Math.round(targetRpm);
+    const checkpoint = getCheckpointAtTime(time);
+    if (checkpoint) {
+      const prediction = predictJudgment(checkpoint, time, targetRpm);
+      elements.tooltipPreview.style.display = 'block';
+      elements.tooltipPreview.className = 'tooltip-preview ' + prediction.result;
+      const resultText = { steady: 'Steady', drift: 'Drift', break: 'Break' }[prediction.result];
+      elements.tooltipPreview.textContent = `此时按空格: ${resultText} (±${prediction.deviation.toFixed(1)}%)`;
+      const duration = state.currentSegment.duration;
+      const maxRpm = Math.max(...state.currentSegment.rpmCurve.map(p => p.rpm)) * 1.2 || 100;
+      const x = (time / duration) * 600;
+      const y = 200 - 10 - (targetRpm / maxRpm) * 180;
+      elements.previewMarker.style.display = 'block';
+      elements.previewCircle.setAttribute('cx', x.toFixed(2));
+      elements.previewCircle.setAttribute('cy', y.toFixed(2));
+      elements.previewCircle.setAttribute('class', prediction.result);
+      elements.previewText.setAttribute('x', x.toFixed(2));
+      elements.previewText.setAttribute('y', (y - 12).toFixed(2));
+      elements.previewText.setAttribute('class', prediction.result);
+      elements.previewText.textContent = resultText;
+    } else {
+      elements.tooltipPreview.style.display = 'none';
+      elements.previewMarker.style.display = 'none';
+    }
+    const containerRect = elements.progressContainer.getBoundingClientRect();
+    const tooltipX = clientX - containerRect.left;
+    elements.hoverTooltip.style.display = 'block';
+    elements.hoverTooltip.style.left = tooltipX + 'px';
+  }
+
+  function hideHoverTooltip() {
+    elements.hoverTooltip.style.display = 'none';
+    elements.previewMarker.style.display = 'none';
+  }
+
+  function getCheckpointAtTime(time) {
+    if (!state.currentSegment) return null;
+    for (let i = 0; i < state.currentSegment.checkpoints.length; i++) {
+      const cp = state.currentSegment.checkpoints[i];
+      if (time >= cp.startTime && time <= cp.endTime) {
+        return { ...cp, index: i };
+      }
+    }
+    return null;
+  }
+
+  function predictJudgment(checkpoint, time, targetRpm) {
+    const actualRpm = targetRpm;
+    const centerTime = (checkpoint.startTime + checkpoint.endTime) / 2;
+    const timeOffset = Math.abs(time - centerTime);
+    const halfDuration = (checkpoint.endTime - checkpoint.startTime) / 2;
+    const timingFactor = timeOffset / halfDuration;
+    const rpmDeviation = Math.abs(actualRpm - targetRpm) / targetRpm * 100;
+    const deviation = rpmDeviation * 0.4 + timingFactor * 100 * 0.6;
+    let result;
+    if (deviation <= JUDGMENT_THRESHOLDS.STEADY) {
+      result = 'steady';
+    } else if (deviation <= JUDGMENT_THRESHOLDS.DRIFT) {
+      result = 'drift';
+    } else {
+      result = 'break';
+    }
+    return {
+      deviation: parseFloat(deviation.toFixed(2)),
+      result
+    };
+  }
+
   document.addEventListener('DOMContentLoaded', init);
 })();
